@@ -38,7 +38,7 @@ defmodule Rajska.Schema do
 
   def find_middleware({{QueryAuthorization, :call}, _config}), do: true
   def find_middleware({{Absinthe.Resolution, :call}, _config}), do: true
-  def find_middleware({_middleware, _config}), do: false
+  def find_middleware(_), do: false
 
   @spec add_object_authorization([Middleware.spec(), ...]) :: [Middleware.spec(), ...]
   def add_object_authorization(middlewares) do
