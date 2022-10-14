@@ -128,6 +128,13 @@ defmodule Rajska.ObjectAuthorization do
   end
 
   defp find_associations(
+         [%{schema_node: %Type.Interface{} = schema_node, selections: selections} | tail],
+         resolution
+       ) do
+    authorize(schema_node, selections ++ tail, resolution)
+  end
+
+  defp find_associations(
          [%{schema_node: schema_node, selections: selections} | tail],
          resolution
        ) do
