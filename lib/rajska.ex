@@ -86,18 +86,19 @@ defmodule Rajska do
   defmacro __using__(opts \\ []) do
     super_role = Keyword.get(opts, :super_role, :admin)
     valid_roles = Keyword.get(opts, :valid_roles, [super_role])
-    default_rule =  Keyword.get(opts, :default_rule, :default)
+    default_rule = Keyword.get(opts, :default_rule, :default)
+    default_authorize = Keyword.get(opts, :default_authorize, nil)
 
     quote do
       @behaviour Authorization
 
       @spec config() :: Keyword.t()
       def config do
-        Keyword.merge(unquote(opts), [
+        Keyword.merge(unquote(opts),
           valid_roles: unquote(valid_roles),
           super_role: unquote(super_role),
           default_rule: unquote(default_rule)
-        ])
+        )
       end
 
       def get_current_user(%{current_user: current_user}), do: current_user
@@ -120,12 +121,20 @@ defmodule Rajska do
 
       def role_authorized?(_user_role, :all), do: true
       def role_authorized?(role, _allowed_role) when is_super_role(role), do: true
-      def role_authorized?(user_role, allowed_role) when is_atom(allowed_role), do: user_role === allowed_role
-      def role_authorized?(user_role, allowed_roles) when is_list(allowed_roles), do: user_role in allowed_roles
 
-      def has_user_access?(%user_struct{id: user_id} = current_user, %scope{} = struct, unquote(default_rule)) do
+      def role_authorized?(user_role, allowed_role) when is_atom(allowed_role),
+        do: user_role === allowed_role
+
+      def role_authorized?(user_role, allowed_roles) when is_list(allowed_roles),
+        do: user_role in allowed_roles
+
+      def has_user_access?(
+            %user_struct{id: user_id} = current_user,
+            %scope{} = struct,
+            unquote(default_rule)
+          ) do
         super_user? = current_user |> get_user_role() |> super_role?()
-        owner? = (user_struct === scope) && (user_id === struct.id)
+        owner? = user_struct === scope && user_id === struct.id
 
         super_user? || owner?
       end
@@ -148,9 +157,11 @@ defmodule Rajska do
         "Not authorized to access object #{object.identifier}"
       end
 
-      def unauthorized_object_message(_resolution, object), do: "Not authorized to access object #{object.identifier}"
+      def unauthorized_object_message(_resolution, object),
+        do: "Not authorized to access object #{object.identifier}"
 
-      def unauthorized_field_message(_resolution, field), do: "Not authorized to access field #{field}"
+      def unauthorized_field_message(_resolution, field),
+        do: "Not authorized to access field #{field}"
 
       def super_user?(context) do
         context
@@ -171,6 +182,8 @@ defmodule Rajska do
         |> get_current_user()
         |> has_user_access?(scoped_struct, rule)
       end
+
+      def default_authorize(_context, _object), do: unquote(default_authorize)
 
       defoverridable Authorization
     end
