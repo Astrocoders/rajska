@@ -21,6 +21,9 @@ defmodule Rajska.FieldAuthorization do
 
       # Can also use custom rules for each field
       field :always_private, :string, meta: [private: true, rule: :private]
+
+      # Can also pass a anonymizer function in case of authentication failure
+      field :email_anon, meta: [private: true, anonymizer: &(anonymize_email(&1))]
     end
 
     object :field_scope_user do
@@ -41,18 +44,19 @@ defmodule Rajska.FieldAuthorization do
     Type
   }
 
-  def call(resolution, [object: %Type.Object{fields: fields} = object, field: field]) do
+  def call(resolution, object: %Type.Object{fields: fields} = object, field: field) do
     {private_config, _binding} = fields[field] |> Type.meta(:private) |> Code.eval_quoted()
     field_private? = field_private?(private_config, resolution.source)
     scope? = get_scope!(object)
 
     default_rule = Rajska.apply_auth_mod(resolution.context, :default_rule)
     rule = Type.meta(fields[field], :rule) || default_rule
+    {anonymizer, _binding} = fields[field] |> Type.meta(:anonymizer) |> Code.eval_quoted()
 
     resolution
     |> Map.get(:context)
     |> authorized?(scope? && field_private?, resolution.source, rule)
-    |> put_result(resolution, field)
+    |> put_result(resolution, field, anonymizer)
   end
 
   defp field_private?(true, _source), do: true
@@ -64,10 +68,17 @@ defmodule Rajska.FieldAuthorization do
     scope_field? = Type.meta(object, :scope_field?)
 
     case {scope?, scope_field?} do
-      {nil, nil} -> true
-      {nil, scope_field?} -> scope_field?
-      {scope?, nil} -> scope?
-      {_, _} -> raise "Error in #{inspect object.identifier}. If scope_field? is defined, then scope? must not be defined"
+      {nil, nil} ->
+        true
+
+      {nil, scope_field?} ->
+        scope_field?
+
+      {scope?, nil} ->
+        scope?
+
+      {_, _} ->
+        raise "Error in #{inspect(object.identifier)}. If scope_field? is defined, then scope? must not be defined"
     end
   end
 
@@ -77,9 +88,14 @@ defmodule Rajska.FieldAuthorization do
     Rajska.apply_auth_mod(context, :context_user_authorized?, [context, source, rule])
   end
 
-  defp put_result(true, resolution, _field), do: resolution
+  defp put_result(true, resolution, _field, _), do: resolution
 
-  defp put_result(false, %{context: context} = resolution, field) do
+  defp put_result(false, %{context: _context, source: source} = resolution, field, anonymizer)
+       when is_function(anonymizer) do
+    Resolution.put_result(resolution, anonymizer.(source, field))
+  end
+
+  defp put_result(false, %{context: context} = resolution, field, _anonymizer) do
     Resolution.put_result(
       resolution,
       {:error, Rajska.apply_auth_mod(context, :unauthorized_field_message, [resolution, field])}

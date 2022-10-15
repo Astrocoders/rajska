@@ -2,14 +2,13 @@ defmodule Rajska.FieldAuthorizationTest do
   use ExUnit.Case, async: true
 
   defmodule User do
-    defstruct [
-      id: 1,
-      name: "User",
-      email: "email@user.com",
-      phone: "123456",
-      is_email_public: true,
-      always_private: "private!"
-    ]
+    defstruct id: 1,
+              name: "User",
+              email: "email@user.com",
+              phone: "123456",
+              is_email_public: true,
+              always_private: "private!",
+              email_anon: "anon@email.com"
   end
 
   defmodule Authorization do
@@ -29,7 +28,7 @@ defmodule Rajska.FieldAuthorizationTest do
     def context(ctx), do: Map.put(ctx, :authorization, Authorization)
 
     def middleware(middleware, field, %{identifier: identifier} = object)
-    when identifier not in [:query, :mutation] do
+        when identifier not in [:query, :mutation] do
       Rajska.add_field_authorization(middleware, field, object)
     end
 
@@ -37,69 +36,91 @@ defmodule Rajska.FieldAuthorizationTest do
 
     query do
       field :get_user, :user do
-        arg :id, non_null(:integer)
-        arg :is_email_public, non_null(:boolean)
+        arg(:id, non_null(:integer))
+        arg(:is_email_public, non_null(:boolean))
 
-        resolve fn args, _ ->
-          {:ok, %User{
-            id: args.id,
-            name: "bob",
-            is_email_public: args.is_email_public,
-            phone: "123456",
-            email: "bob@email.com",
-            always_private: "private!",
-          }} end
+        resolve(fn args, _ ->
+          {:ok,
+           %User{
+             id: args.id,
+             name: "bob",
+             is_email_public: args.is_email_public,
+             phone: "123456",
+             email: "bob@email.com",
+             always_private: "private!",
+             email_anon: "anon@email.com"
+           }}
+        end)
       end
 
       field :get_field_scope_user, :field_scope_user do
-        arg :id, non_null(:integer)
+        arg(:id, non_null(:integer))
 
-        resolve fn args, _ ->
-          {:ok, %User{
-            id: args.id,
-            name: "bob",
-            phone: "123456",
-          }} end
+        resolve(fn args, _ ->
+          {:ok,
+           %User{
+             id: args.id,
+             name: "bob",
+             phone: "123456"
+           }}
+        end)
       end
 
       field :get_not_scoped, :not_scoped do
-        resolve fn _args, _ -> {:ok, %{phone: "123456"}} end
+        resolve(fn _args, _ -> {:ok, %{phone: "123456"}} end)
       end
 
       field :get_both_scopes, :both_scopes do
-        resolve fn _args, _ -> {:ok, %{phone: "123456"}} end
+        resolve(fn _args, _ -> {:ok, %{phone: "123456"}} end)
       end
     end
 
     object :user do
-      meta :scope?, true
+      meta(:scope?, true)
 
-      field :name, :string
-      field :is_email_public, :boolean
+      field(:name, :string)
+      field(:is_email_public, :boolean)
 
-      field :phone, :string, meta: [private: true]
-      field :email, :string, meta: [private: & !&1.is_email_public]
-      field :always_private, :string, meta: [private: true, rule: :private]
+      field(:phone, :string, meta: [private: true])
+      field(:email, :string, meta: [private: &(!&1.is_email_public)])
+      field(:always_private, :string, meta: [private: true, rule: :private])
+
+      field(:email_anon, :string,
+        meta: [
+          private: true,
+          rule: :private,
+          anonymizer: fn source, field ->
+            content = Map.get(source, field)
+
+            {:ok,
+             Regex.replace(
+               ~r/(\w)(.+?)(@)(\w)(.+?)(.\w+$)/,
+               content,
+               "\\g{1}*****\\g{3}\\g{4}*****\\g{6}"
+             )}
+          end
+        ]
+      )
     end
 
     object :field_scope_user do
-      meta :scope_field?, true
+      meta(:scope_field?, true)
 
-      field :name, :string
-      field :phone, :string, meta: [private: true]
+      field(:name, :string)
+      field(:phone, :string, meta: [private: true])
     end
 
     object :not_scoped do
-      meta :scope?, false
+      meta(:scope?, false)
 
-      field :phone, :string, meta: [private: true]
+      field(:phone, :string, meta: [private: true])
     end
 
     object :both_scopes do
-      meta :scope?, true
-      meta :scope_field?, false
+      meta(:scope?, true)
+      meta(:scope_field?, false)
 
-      field :phone, :string, meta: [private: true]
+      field(:phone, :string, meta: [private: true])
     end
   end
 
@@ -117,10 +138,11 @@ defmodule Rajska.FieldAuthorizationTest do
   end
 
   test "Custom rules are applied" do
-    {:ok, %{
-      errors: errors,
-      data: %{"getUser" => data}
-    }} = Absinthe.run(get_user_private_query(1), __MODULE__.Schema, context(:user, 1))
+    {:ok,
+     %{
+       errors: errors,
+       data: %{"getUser" => data}
+     }} = Absinthe.run(get_user_private_query(1), __MODULE__.Schema, context(:user, 1))
 
     error_messages = Enum.map(errors, & &1.message)
     assert Enum.member?(error_messages, "Not authorized to access field always_private")
@@ -128,13 +150,24 @@ defmodule Rajska.FieldAuthorizationTest do
     assert is_nil(data["alwaysPrivate"])
   end
 
+  test "Anonymizer is applied" do
+    {:ok,
+     %{
+       errors: errors,
+       data: %{"getUser" => data}
+     }} = Absinthe.run(get_user_private_query(1), __MODULE__.Schema, context(:user, 1))
+
+    assert data["emailAnon"] == "a*****@e*****.com"
+  end
+
   test "User cannot access other user private fields" do
     get_user_query = get_user_query(2, false)
 
-    {:ok, %{
-      errors: errors,
-      data: %{"getUser" => data}
-    }} = Absinthe.run(get_user_query, __MODULE__.Schema, context(:user, 1))
+    {:ok,
+     %{
+       errors: errors,
+       data: %{"getUser" => data}
+     }} = Absinthe.run(get_user_query, __MODULE__.Schema, context(:user, 1))
 
     error_messages = Enum.map(errors, & &1.message)
     assert Enum.member?(error_messages, "Not authorized to access field phone")
@@ -161,10 +194,11 @@ defmodule Rajska.FieldAuthorizationTest do
     user = %{role: :user, id: 1}
     get_user_query = get_field_scope_user(2)
 
-    {:ok, %{
-      errors: errors,
-      data: %{"getFieldScopeUser" => data}
-    }} = Absinthe.run(get_user_query, __MODULE__.Schema, context: %{current_user: user})
+    {:ok,
+     %{
+       errors: errors,
+       data: %{"getFieldScopeUser" => data}
+     }} = Absinthe.run(get_user_query, __MODULE__.Schema, context: %{current_user: user})
 
     error_messages = Enum.map(errors, & &1.message)
     assert Enum.member?(error_messages, "Not authorized to access field phone")
@@ -174,7 +208,8 @@ defmodule Rajska.FieldAuthorizationTest do
   end
 
   test "Works when scoping is disabled" do
-    {:ok, result} = Absinthe.run("{ getNotScoped { phone } }", __MODULE__.Schema, context(:user, 2))
+    {:ok, result} =
+      Absinthe.run("{ getNotScoped { phone } }", __MODULE__.Schema, context(:user, 2))
 
     assert %{data: %{"getNotScoped" => data}} = result
     assert is_binary(data["phone"])
@@ -182,9 +217,15 @@ defmodule Rajska.FieldAuthorizationTest do
   end
 
   test "Raises when both scope metas are defined for an object" do
-    assert_raise RuntimeError, ~r/Error in :both_scopes. If scope_field\? is defined, then scope\? must not be defined/, fn ->
-      Absinthe.run("{ getBothScopes { phone } }", __MODULE__.Schema, context(:user, 2))
-    end
+    assert_raise RuntimeError,
+                 ~r/Error in :both_scopes. If scope_field\? is defined, then scope\? must not be defined/,
+                 fn ->
+                   Absinthe.run(
+                     "{ getBothScopes { phone } }",
+                     __MODULE__.Schema,
+                     context(:user, 2)
+                   )
+                 end
   end
 
   defp get_user_query(id, is_email_public) do
@@ -216,6 +257,7 @@ defmodule Rajska.FieldAuthorizationTest do
     {
       getUser(id: #{id}, isEmailPublic: true) {
         alwaysPrivate
+        emailAnon
       }
     }
     """
